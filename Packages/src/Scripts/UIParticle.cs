@@ -4,9 +4,9 @@ using System.Runtime.CompilerServices;
 using Coffee.UIParticleExtensions;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.Rendering;
 using UnityEngine.Serialization;
-using UnityEngine.UI;
 using Random = UnityEngine.Random;
 
 [assembly: InternalsVisibleTo("Coffee.UIParticle.Editor")]
@@ -19,7 +19,7 @@ namespace Coffee.UIExtensions
     [ExecuteAlways]
     [RequireComponent(typeof(RectTransform))]
     [RequireComponent(typeof(CanvasRenderer))]
-    public class UIParticle : MaskableGraphic, ISerializationCallbackReceiver
+    public class UIParticle : UIBehaviour, ISerializationCallbackReceiver
     {
         public enum AutoScalingMode
         {
@@ -42,6 +42,9 @@ namespace Coffee.UIExtensions
             Relative,
             Absolute
         }
+
+        [SerializeField]
+        private bool m_Maskable = true;
 
         [HideInInspector]
         [SerializeField]
@@ -104,17 +107,43 @@ namespace Coffee.UIExtensions
         private bool m_ResetScaleOnEnable;
 
         private readonly List<UIParticleRenderer> _renderers = new List<UIParticleRenderer>();
+        private Canvas _canvas;
         private int _groupId;
         private Camera _orthoCamera;
         private DrivenRectTransformTracker _tracker;
 
-        /// <summary>
-        /// Should this graphic be considered a target for ray-casting?
-        /// </summary>
-        public override bool raycastTarget
+        public RectTransform rectTransform => transform as RectTransform;
+
+        public Canvas canvas
         {
-            get => false;
-            set { }
+            get
+            {
+                if (_canvas == null)
+                {
+                    var tr = transform;
+                    while (tr && !_canvas)
+                    {
+                        if (tr.TryGetComponent(out _canvas)) return _canvas;
+                        tr = tr.parent;
+                    }
+                }
+
+                return _canvas;
+            }
+        }
+
+        /// <summary>
+        /// Does this graphic allow masking.
+        /// </summary>
+        public bool maskable
+        {
+            get => m_Maskable;
+            set
+            {
+                if (value == m_Maskable) return;
+                m_Maskable = value;
+                UpdateRendererMaterial();
+            }
         }
 
         /// <summary>
@@ -269,8 +298,6 @@ namespace Coffee.UIExtensions
             }
         }
 
-        public override Material materialForRendering => null;
-
         /// <summary>
         /// Paused.
         /// </summary>
@@ -285,7 +312,6 @@ namespace Coffee.UIExtensions
             ResetGroupId();
             UpdateTracker();
             UIParticleUpdater.Register(this);
-            RegisterDirtyMaterialCallback(UpdateRendererMaterial);
 
             if (0 < particles.Count)
             {
@@ -296,7 +322,7 @@ namespace Coffee.UIExtensions
                 RefreshParticles();
             }
 
-            base.OnEnable();
+            UpdateRendererMaterial();
 
             // Reset scale for upgrade.
             if (m_ResetScaleOnEnable)
@@ -314,9 +340,12 @@ namespace Coffee.UIExtensions
             UpdateTracker();
             UIParticleUpdater.Unregister(this);
             _renderers.ForEach(r => r.Reset());
-            UnregisterDirtyMaterialCallback(UpdateRendererMaterial);
+            _canvas = null;
+        }
 
-            base.OnDisable();
+        protected override void OnCanvasHierarchyChanged()
+        {
+            _canvas = null;
         }
 
         /// <summary>
@@ -326,11 +355,17 @@ namespace Coffee.UIExtensions
         {
         }
 
+        protected override void OnTransformParentChanged()
+        {
+            _canvas = null;
+        }
+
 #if UNITY_EDITOR
         protected override void OnValidate()
         {
             base.OnValidate();
             UpdateTracker();
+            UpdateRendererMaterial();
         }
 #endif
 
@@ -469,7 +504,7 @@ namespace Coffee.UIExtensions
             RefreshParticles(particles);
         }
 
-        public void RefreshParticles(List<ParticleSystem> particles)
+        public void RefreshParticles(List<ParticleSystem> particleSystems)
         {
             // #246: Nullptr exceptions when using nested UIParticle components in hierarchy
             _renderers.Clear();
@@ -489,9 +524,9 @@ namespace Coffee.UIExtensions
             }
 
             var j = 0;
-            for (var i = 0; i < particles.Count; i++)
+            for (var i = 0; i < particleSystems.Count; i++)
             {
-                var ps = particles[i];
+                var ps = particleSystems[i];
                 if (!ps) continue;
                 GetRenderer(j++).Set(this, ps, false);
                 if (ps.trails.enabled)
@@ -521,11 +556,10 @@ namespace Coffee.UIExtensions
             for (var i = 0; i < _renderers.Count; i++)
             {
                 var r = _renderers[i];
-                if (!r)
-                {
-                    RefreshParticles(particles);
-                    break;
-                }
+                if (r) continue;
+
+                RefreshParticles(particles);
+                break;
             }
 
             var bakeCamera = GetBakeCamera();
@@ -533,6 +567,7 @@ namespace Coffee.UIExtensions
             {
                 var r = _renderers[i];
                 if (!r) continue;
+
                 r.UpdateMesh(bakeCamera);
             }
         }
@@ -552,17 +587,6 @@ namespace Coffee.UIExtensions
             _groupId = m_GroupId == m_GroupMaxId
                 ? m_GroupId
                 : Random.Range(m_GroupId, m_GroupMaxId + 1);
-        }
-
-        protected override void UpdateMaterial()
-        {
-        }
-
-        /// <summary>
-        /// Call to update the geometry of the Graphic onto the CanvasRenderer.
-        /// </summary>
-        protected override void UpdateGeometry()
-        {
         }
 
         private void UpdateRendererMaterial()
@@ -628,8 +652,7 @@ namespace Coffee.UIExtensions
             }
 
             //
-            var size = ((RectTransform)root.transform).rect.size;
-            _orthoCamera.orthographicSize = Mathf.Max(size.x, size.y) * root.scaleFactor;
+            _orthoCamera.orthographicSize = 10;
             _orthoCamera.transform.SetPositionAndRotation(new Vector3(0, 0, -1000), Quaternion.identity);
             _orthoCamera.orthographic = true;
             _orthoCamera.farClipPlane = 2000f;
@@ -639,7 +662,7 @@ namespace Coffee.UIExtensions
 
         private void UpdateTracker()
         {
-            if (!enabled || !autoScaling || autoScalingMode != AutoScalingMode.Transform)
+            if (!enabled || autoScalingMode != AutoScalingMode.Transform)
             {
                 _tracker.Clear();
             }

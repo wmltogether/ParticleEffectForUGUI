@@ -2,11 +2,13 @@
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
+using UnityEngine.Profiling;
+using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 namespace Coffee.UIParticleExtensions
 {
-    public static class Color32Extensions
+    internal static class Color32Extensions
     {
         private static byte[] s_LinearToGammaLut;
 
@@ -25,7 +27,7 @@ namespace Coffee.UIParticleExtensions
         }
     }
 
-    public static class Vector3Extensions
+    internal static class Vector3Extensions
     {
         public static Vector3 Inverse(this Vector3 self)
         {
@@ -83,14 +85,14 @@ namespace Coffee.UIParticleExtensions
                 : self.texture;
         }
 #else
-        internal static Texture2D GetActualTexture(this Sprite self)
+        public static Texture2D GetActualTexture(this Sprite self)
         {
             return self ? self.texture : null;
         }
 #endif
     }
 
-    public static class ParticleSystemExtensions
+    internal static class ParticleSystemExtensions
     {
         private static ParticleSystem.Particle[] s_TmpParticles = new ParticleSystem.Particle[2048];
 
@@ -227,8 +229,11 @@ namespace Coffee.UIParticleExtensions
 
         public static void Exec(this List<ParticleSystem> self, Action<ParticleSystem> action)
         {
-            self.RemoveAll(p => !p);
-            self.ForEach(action);
+            foreach (var p in self)
+            {
+                if (!p) continue;
+                action.Invoke(p);
+            }
         }
     }
 
@@ -281,5 +286,143 @@ namespace Coffee.UIParticleExtensions
             return null;
         }
 #endif
+    }
+
+    internal static class ListExtensions
+    {
+        public static void RemoveAtFast<T>(this List<T> self, int index)
+        {
+            if (self == null) return;
+
+            var lastIndex = self.Count - 1;
+            self[index] = self[lastIndex];
+            self.RemoveAt(lastIndex);
+        }
+    }
+
+    internal static class MeshExtensions
+    {
+        internal static readonly ObjectPool<Mesh> s_MeshPool = new ObjectPool<Mesh>(
+            () =>
+            {
+                var mesh = new Mesh
+                {
+                    hideFlags = HideFlags.DontSave | HideFlags.NotEditable
+                };
+                mesh.MarkDynamic();
+                return mesh;
+            },
+            mesh => mesh,
+            mesh =>
+            {
+                if (mesh)
+                {
+                    mesh.Clear();
+                }
+            });
+
+        public static Mesh Rent()
+        {
+            return s_MeshPool.Rent();
+        }
+
+        public static void Return(ref Mesh mesh)
+        {
+            s_MeshPool.Return(ref mesh);
+        }
+    }
+
+    // internal static class Vector3Extensions
+    // {
+    //     public static Vector3 Inverse(this Vector3 self)
+    //     {
+    //         self.x = Mathf.Approximately(self.x, 0) ? 1 : 1 / self.x;
+    //         self.y = Mathf.Approximately(self.y, 0) ? 1 : 1 / self.y;
+    //         self.z = Mathf.Approximately(self.z, 0) ? 1 : 1 / self.z;
+    //         return self;
+    //     }
+    //
+    //     public static Vector3 GetScaled(this Vector3 self, Vector3 other1)
+    //     {
+    //         self.Scale(other1);
+    //         return self;
+    //     }
+    //
+    //     public static Vector3 GetScaled(this Vector3 self, Vector3 other1, Vector3 other2)
+    //     {
+    //         self.Scale(other1);
+    //         self.Scale(other2);
+    //         return self;
+    //     }
+    //
+    //     public static bool IsVisible(this Vector3 self)
+    //     {
+    //         return 0 < Mathf.Abs(self.x * self.y);
+    //     }
+    // }
+
+    /// <summary>
+    /// Extension methods for Graphic class.
+    /// </summary>
+    internal static class GraphicExtensions
+    {
+        private static readonly Vector3[] s_WorldCorners = new Vector3[4];
+        private static readonly Bounds s_ScreenBounds = new Bounds(new Vector3(0.5f, 0.5f, 0.5f), new Vector3(1, 1, 1));
+
+        /// <summary>
+        /// Check if a Graphic component is currently in the screen view.
+        /// </summary>
+        public static bool IsInScreen(this Graphic self)
+        {
+            if (!self || !self.canvas) return false;
+
+            if (FrameCache.TryGet(self, nameof(IsInScreen), out bool result))
+            {
+                return result;
+            }
+
+            Profiler.BeginSample("(CCR)[GraphicExtensions] InScreen");
+            var cam = self.canvas.renderMode != RenderMode.ScreenSpaceOverlay
+                ? self.canvas.worldCamera
+                : null;
+            var min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            var max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+            self.rectTransform.GetWorldCorners(s_WorldCorners);
+
+            for (var i = 0; i < 4; i++)
+            {
+                if (cam)
+                {
+                    s_WorldCorners[i] = cam.WorldToViewportPoint(s_WorldCorners[i]);
+                }
+                else
+                {
+                    s_WorldCorners[i] = RectTransformUtility.WorldToScreenPoint(null, s_WorldCorners[i]);
+                    s_WorldCorners[i].x /= Screen.width;
+                    s_WorldCorners[i].y /= Screen.height;
+                }
+
+                s_WorldCorners[i].z = 0;
+                min = Vector3.Min(s_WorldCorners[i], min);
+                max = Vector3.Max(s_WorldCorners[i], max);
+            }
+
+            var bounds = new Bounds(min, Vector3.zero);
+            bounds.Encapsulate(max);
+            result = bounds.Intersects(s_ScreenBounds);
+            FrameCache.Set(self, nameof(IsInScreen), result);
+            Profiler.EndSample();
+
+            return result;
+        }
+
+        public static float GetParentGroupAlpha(this Graphic self)
+        {
+            var alpha = self.canvasRenderer.GetAlpha();
+            if (Mathf.Approximately(alpha, 0)) return 1;
+
+            var inheritedAlpha = self.canvasRenderer.GetInheritedAlpha();
+            return Mathf.Clamp01(inheritedAlpha / alpha);
+        }
     }
 }

@@ -12,9 +12,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
-using Coffee.UIParticleExtensions;
 using UnityEditor;
-using UnityEditor.UI;
 using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.UI;
@@ -24,7 +22,7 @@ namespace Coffee.UIExtensions
 {
     [CustomEditor(typeof(UIParticle))]
     [CanEditMultipleObjects]
-    internal class UIParticleEditor : GraphicEditor
+    internal class UIParticleEditor : Editor
     {
 #if UNITY_2021_2_OR_NEWER
 #if UNITY_2022_1_OR_NEWER
@@ -124,7 +122,7 @@ namespace Coffee.UIExtensions
             {
                 var uiParticles = Selection.gameObjects.Select(x => x.GetComponent<ParticleSystem>())
                     .Where(x => x)
-                    .Select(x => x.GetComponentInParent<UIParticle>(true))
+                    .Select(x => x.GetComponentInParent<UIParticle>())
                     .Where(x => x && x.canvas)
                     .Concat(Selection.gameObjects.Select(x => x.GetComponent<UIParticle>())
                         .Where(x => x && x.canvas))
@@ -144,10 +142,8 @@ namespace Coffee.UIExtensions
         /// <summary>
         /// This function is called when the object becomes enabled and active.
         /// </summary>
-        protected override void OnEnable()
+        private void OnEnable()
         {
-            base.OnEnable();
-
             _maskable = serializedObject.FindProperty("m_Maskable");
             _scale3D = serializedObject.FindProperty("m_Scale3D");
             _animatableProperties = serializedObject.FindProperty("m_AnimatableProperties");
@@ -304,7 +300,7 @@ namespace Coffee.UIExtensions
             }
 
             // Does the shader support UI masks?
-            if (current.maskable && current.GetComponentInParent<Mask>(false))
+            if (current.maskable && current.GetComponentInParent<Mask>())
             {
                 foreach (var mat in current.materials)
                 {
@@ -525,9 +521,7 @@ namespace Coffee.UIExtensions
         {
             if (!p || (ignoreCurrent && target == p)) return;
 
-            var cr = p.canvasRenderer;
             DestroyImmediate(p);
-            DestroyImmediate(cr);
 
 #if UNITY_2018_3_OR_NEWER
             var stage = PrefabStageUtility.GetCurrentPrefabStage();

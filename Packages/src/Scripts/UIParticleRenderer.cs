@@ -26,7 +26,7 @@ namespace Coffee.UIExtensions
         private static readonly List<UIParticleRenderer> s_Renderers = new List<UIParticleRenderer>();
         private static readonly List<Color32> s_Colors = new List<Color32>();
         private static readonly Vector3[] s_Corners = new Vector3[4];
-        private Material _currentMaterialForRendering;
+        private Material _materialForRendering;
         private bool _delay;
         private int _index;
         private bool _isTrail;
@@ -116,9 +116,8 @@ namespace Coffee.UIExtensions
             }
             else
             {
-                ModifiedMaterial.Remove(_modifiedMaterial);
-                _modifiedMaterial = null;
-                _currentMaterialForRendering = null;
+                MaterialRegistry.Release(ref _modifiedMaterial);
+                _materialForRendering = null;
             }
         }
 
@@ -134,17 +133,14 @@ namespace Coffee.UIExtensions
                     hideFlags = HideFlags.HideAndDontSave
                 };
             }
-
-            _currentMaterialForRendering = null;
         }
 
         protected override void OnDisable()
         {
             base.OnDisable();
 
-            ModifiedMaterial.Remove(_modifiedMaterial);
-            _modifiedMaterial = null;
-            _currentMaterialForRendering = null;
+            MaterialRegistry.Release(ref _modifiedMaterial);
+            _materialForRendering = null;
         }
 
         public static UIParticleRenderer AddRenderer(UIParticle parent, int index)
@@ -176,12 +172,9 @@ namespace Coffee.UIExtensions
         /// </summary>
         public override Material GetModifiedMaterial(Material baseMaterial)
         {
-            _currentMaterialForRendering = null;
-
             if (!IsActive() || !_parent)
             {
-                ModifiedMaterial.Remove(_modifiedMaterial);
-                _modifiedMaterial = null;
+                MaterialRegistry.Release(ref _modifiedMaterial);
                 return baseMaterial;
             }
 
@@ -191,18 +184,26 @@ namespace Coffee.UIExtensions
             var texture = mainTexture;
             if (texture == null && _parent.m_AnimatableProperties.Length == 0)
             {
-                ModifiedMaterial.Remove(_modifiedMaterial);
-                _modifiedMaterial = null;
+                MaterialRegistry.Release(ref _modifiedMaterial);
                 return modifiedMaterial;
             }
 
             //
-            var id = _parent.m_AnimatableProperties.Length == 0 ? 0 : GetInstanceID();
-            modifiedMaterial = ModifiedMaterial.Add(modifiedMaterial, texture, id);
-            ModifiedMaterial.Remove(_modifiedMaterial);
-            _modifiedMaterial = modifiedMaterial;
+            var hash = new Hash128(
+                modifiedMaterial ? (uint)modifiedMaterial.GetInstanceID() : 0,
+                texture ? (uint)texture.GetInstanceID() : 0,
+                0 < _parent.m_AnimatableProperties.Length ? (uint)GetInstanceID() : 0,
+                0
+            );
+            if (!MaterialRegistry.Valid(hash, _modifiedMaterial))
+            {
+                MaterialRegistry.Get(hash, ref _modifiedMaterial, () => new Material(modifiedMaterial)
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                });
+            }
 
-            return modifiedMaterial;
+            return _modifiedMaterial;
         }
 
         public void Set(UIParticle parent, ParticleSystem ps, bool isTrail)
@@ -265,8 +266,7 @@ namespace Coffee.UIExtensions
                 || (!_particleSystem.IsAlive() && !_particleSystem.isPlaying) // No particle.
                 || (_isTrail && !_particleSystem.trails.enabled) // Trail, but it is not enabled.
 #if UNITY_2018_3_OR_NEWER
-                || canvasRenderer.GetInheritedAlpha() <
-                0.01f // #102: Do not bake particle system to mesh when the alpha is zero.
+                || canvasRenderer.GetInheritedAlpha() < 0.01f // #102: Do not bake particle system to mesh when the alpha is zero.
 #endif
             )
             {
@@ -408,57 +408,77 @@ namespace Coffee.UIExtensions
                     workerMesh.SetColors(s_Colors);
                     Profiler.EndSample();
                 }
+
+                var components = ListPool<Component>.Rent();
+                GetComponents(typeof(IMeshModifier), components);
+
+#pragma warning disable CS0618 // Type or member is obsolete
+                for (var i = 0; i < components.Count; i++)
+                {
+                    ((IMeshModifier)components[i]).ModifyMesh(workerMesh);
+                }
+#pragma warning restore CS0618 // Type or member is obsolete
+
+                ListPool<Component>.Return(ref components);
             }
 
             Profiler.EndSample();
 
+            // Update animatable material properties.
+            Profiler.BeginSample("[UIParticleRenderer] Update Animatable Material Properties");
+            UpdateMaterialProperties();
+            Profiler.EndSample();
 
             // Get grouped renderers.
+            Profiler.BeginSample("[UIParticleRenderer] Set Mesh");
             s_Renderers.Clear();
             if (_parent.useMeshSharing)
             {
                 UIParticleUpdater.GetGroupedRenderers(_parent.groupId, _index, s_Renderers);
             }
 
-            // Set mesh to the CanvasRenderer.
-            Profiler.BeginSample("[UIParticleRenderer] Set Mesh");
             for (var i = 0; i < s_Renderers.Count; i++)
             {
                 if (s_Renderers[i] == this) continue;
+
                 s_Renderers[i].canvasRenderer.SetMesh(workerMesh);
                 s_Renderers[i]._lastBounds = _lastBounds;
+                s_Renderers[i].canvasRenderer.materialCount = 1;
+                s_Renderers[i].canvasRenderer.SetMaterial(materialForRendering, 0);
             }
 
-            if (!_parent.canRender)
+            if (_parent.canRender)
+            {
+                canvasRenderer.SetMesh(workerMesh);
+            }
+            else
             {
                 workerMesh.Clear();
-            }
-
-            canvasRenderer.SetMesh(workerMesh);
-            Profiler.EndSample();
-
-            // Update animatable material properties.
-            Profiler.BeginSample("[UIParticleRenderer] Update Animatable Material Properties");
-            UpdateMaterialProperties();
-            if (!_parent.useMeshSharing)
-            {
-                if (!_currentMaterialForRendering)
-                {
-                    _currentMaterialForRendering = materialForRendering;
-                }
-
-                for (var i = 0; i < s_Renderers.Count; i++)
-                {
-                    if (s_Renderers[i] == this) continue;
-
-                    s_Renderers[i].canvasRenderer.materialCount = 1;
-                    s_Renderers[i].canvasRenderer.SetMaterial(_currentMaterialForRendering, 0);
-                }
+                canvasRenderer.SetMesh(workerMesh);
             }
 
             Profiler.EndSample();
 
             s_Renderers.Clear();
+        }
+
+        public override Material materialForRendering
+        {
+            get
+            {
+                if (!_materialForRendering)
+                {
+                    _materialForRendering = base.materialForRendering;
+                }
+
+                return _materialForRendering;
+            }
+        }
+
+        public override void SetMaterialDirty()
+        {
+            _materialForRendering = null;
+            base.SetMaterialDirty();
         }
 
         internal void UpdateParticleCount()
@@ -679,12 +699,12 @@ namespace Coffee.UIExtensions
             if (s_Mpb.isEmpty) return;
 
             // #41: Copy the value from MaterialPropertyBlock to CanvasRenderer
-            if (!_modifiedMaterial) return;
+            if (!materialForRendering) return;
 
             for (var i = 0; i < _parent.m_AnimatableProperties.Length; i++)
             {
                 var ap = _parent.m_AnimatableProperties[i];
-                ap.UpdateMaterialProperties(_modifiedMaterial, s_Mpb);
+                ap.UpdateMaterialProperties(materialForRendering, s_Mpb);
             }
 
             s_Mpb.Clear();

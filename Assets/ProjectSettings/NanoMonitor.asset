@@ -14,20 +14,27 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   m_NanoMonitorEnabled: 1
   m_BootSceneNameRegex: .*
-  m_DevelopmentBuildOnly: 1
+  m_DevelopmentBuildOnly: 0
   m_EnabledInEditor: 1
   m_AlwaysIncludeAssembly: 1
   m_InstantiateOnLoad: 1
-  m_Prefab: {fileID: 7211429669315726685, guid: 7cebff2d255b9433cbe23b243c193329,
+  m_Prefab: {fileID: 7211429669315726685, guid: 03d7b376f82b94f7abc8e4d18555f57e,
     type: 3}
   m_Opened: 1
   m_Interval: 0.5
-  m_Anchor: 1
+  m_Anchor: 0
   m_CustomMonitorItems:
-  - m_Format: Screen:{0}x{1} Material:{2}
+  - m_Format: Screen:{0}x{1}
     m_Arg0:
       m_Path: UnityEngine.Screen, UnityEngine.CoreModule;width
     m_Arg1:
       m_Path: UnityEngine.Screen, UnityEngine.CoreModule;height
     m_Arg2:
-      m_Path: Coffee.UIParticleExtensions.MaterialRegistry, Coffee.UIParticle;activeMaterialCount
+      m_Path: 
+  - m_Format: UIParticle:{0} Material:{1}
+    m_Arg0:
+      m_Path: Coffee.UIExtensions.UIParticleUpdater, Coffee.UIParticle;uiParticleCount
+    m_Arg1:
+      m_Path: Coffee.UIParticleInternal.MaterialRepository, Coffee.UIParticle;count
+    m_Arg2:
+      m_Path: 
